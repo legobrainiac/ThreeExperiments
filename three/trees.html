@@ -1,0 +1,323 @@
+			
+<meta charset="UTF-8">
+<html>
+	<title>I like trains</title>
+	<head>
+		<style>
+			body { margin: 0; }
+			canvas { width: 100%; height: 100% }
+		</style>
+	</head>
+	<body>
+		<script src="js/three.js"></script>
+		<script src="js/ImprovedNoise.js"></script>
+		<script src="js/THREEx.Fullscreen.js"></script>
+		<script src="js/libs/inflate.min.js"></script>
+		<script src="js/loaders/FBXLoader.js"></script>
+		<script src="js/libs/dat.gui.min.js"></script>
+		<script>
+            "use strict";
+
+			// Movement
+			const SENS = 0.08;
+			const MOVEMENT_SPEED = 50;
+
+			const PI_2 = Math.PI / 2;
+			
+			let clock = 			new THREE.Clock();
+			let scene = 			new THREE.Scene();
+			let mouse =				new THREE.Vector2();
+			let mouse_movement = 	new THREE.Vector2();
+			let raycaster = 		new THREE.Raycaster();
+			let pitchObject = 		new THREE.Object3D();
+			let yawObject = 		new THREE.Object3D();
+			
+			// Textures / Materials
+			let texture_block_grass;
+			let texture_block_bark;
+			let texture_block_leaf;
+			let texture_skybox;
+
+			let material_block_grass;
+			let material_block_bark;
+			let material_block_leaf;
+
+			// Rendering
+			let renderer;
+			let camera;
+
+			// Helpers
+			let axes;
+
+			// Lights 
+			let ambient_light;
+
+			let moveForward;
+			let moveBackward;
+			let moveLeft;
+			let moveRight;
+			let moveUp;
+			let moveDown;
+
+			// Pointer lock
+			let canPointerLock;
+			let canLook = false;
+
+			let parameters = {
+				tree_x: 0,
+				tree_y: 0,
+				tree_z: -100,
+				tree_size: 150,
+				tree_secondary_trunk_count: 10,
+				tree_leaf_count_per_trunk: 40,
+				};
+
+			let tree;
+
+			init();
+			update();
+
+			function init()
+			{
+				// Event setup
+				addEventListener("mousemove", onMouseMove, false);
+				addEventListener("keydown", onKeyDown, false);
+				addEventListener("keyup", onKeyUp, false);
+
+				// Pointer lock
+				document.addEventListener("mousedown", function(event) {
+					canLook = true;
+				}, false );
+				
+				document.addEventListener("mouseup", function(event) {
+					canLook = false;
+				}, false );
+				
+				document.addEventListener("pointerlockchange", pointerLockChanged, false);
+				document.addEventListener('mozpointerlockchange', pointerLockChanged, false);
+				document.addEventListener('webkitpointerlockchange', pointerLockChanged, false);	
+
+				// Rendered setup
+				renderer = new THREE.WebGLRenderer();
+				renderer.setSize(window.innerWidth, window.innerHeight);
+				renderer.shadowMap.enabled = true;
+
+				document.body.appendChild(renderer.domElement);
+				
+				// Setup camera field of view, view port, near and far plane
+				camera = new THREE.PerspectiveCamera(90, window.innerWidth / window.innerHeight, 1, 10000);
+				camera.position.set(0, 0, 0);
+				 
+				// Scene setup				
+				texture_block_grass = new THREE.TextureLoader().load("textures/grass_top.png");
+				texture_block_grass.magFilter = THREE.NearestFilter;
+				texture_block_grass.minFilter = THREE.LinearMipMapLinearFilter;
+
+				texture_block_bark = new THREE.TextureLoader().load("textures/log_big_oak.png");
+				texture_block_bark.magFilter = THREE.NearestFilter;
+				texture_block_bark.minFilter = THREE.LinearMipMapLinearFilter;
+
+				texture_block_leaf = new THREE.TextureLoader().load("textures/leaves_oak.png");
+				texture_block_leaf.magFilter = THREE.NearestFilter;
+				texture_block_leaf.minFilter = THREE.LinearMipMapLinearFilter;
+
+				texture_skybox = new THREE.TextureLoader().load("textures/sky.jpg");
+
+				material_block_grass = new THREE.MeshStandardMaterial( { color: 0x4a6f28, map: texture_block_grass } );
+				material_block_bark = new THREE.MeshStandardMaterial( { map: texture_block_bark } );
+				material_block_leaf = new THREE.MeshStandardMaterial( { color: 0x5b8731, map: texture_block_leaf, transparent: true } );
+
+				axes = new THREE.AxesHelper(50);
+				axes.position.set(0, 0, 0);
+                scene.add(axes); 
+                
+                let geometry = new THREE.BoxGeometry(1, 1, 1);
+                let material = new THREE.MeshBasicMaterial( { color: 0x00ff00 } );
+                let cube = new THREE.Mesh(geometry, material);
+				scene.add(cube);
+
+				// Lights
+				ambient_light = new THREE.AmbientLight(0xffffffff, 2);
+				scene.add(ambient_light);
+
+				let skybox_geometry = new THREE.CubeGeometry(9999, 9999, 9999);
+				let skybox_material = new THREE.MeshBasicMaterial( { side: THREE.BackSide, map: texture_skybox } );
+				let skybox_cube = new THREE.Mesh(skybox_geometry, skybox_material);
+
+                scene.add(skybox_cube);
+                
+				pitchObject.add(camera);
+				yawObject.add(pitchObject);
+				
+				scene.add(yawObject);
+
+				let gui = new dat.GUI();
+				let folder = gui.addFolder('Tree Generator');
+				folder.add(parameters, 'tree_x', -1000, 1000, 1).onChange(update_tree);
+				folder.add(parameters, 'tree_y', -1000, 1000, 1).onChange(update_tree);
+				folder.add(parameters, 'tree_z', -1000, 1000, 1).onChange(update_tree);
+				folder.add(parameters, 'tree_size', 0, 1000, 1).onChange(update_tree);
+				folder.add(parameters, 'tree_secondary_trunk_count', 0, 100, 1).onChange(update_tree);
+				folder.add(parameters, 'tree_leaf_count_per_trunk', 0, 100, 1).onChange(update_tree);
+				folder.open();
+
+				tree = generate_tree(parameters.tree_x, parameters.tree_y, parameters.tree_z, parameters.tree_size, parameters.tree_secondary_trunk_count, parameters.tree_leaf_count_per_trunk);
+			}
+			
+			function update_tree()
+			{
+				console.log(parameters);
+				scene.remove(tree);
+				tree = generate_tree(parameters.tree_x, parameters.tree_y, parameters.tree_z, parameters.tree_size, parameters.tree_secondary_trunk_count, parameters.tree_leaf_count_per_trunk);
+			}
+
+			function update()
+			{
+				requestAnimationFrame(update);
+				let dt = clock.getDelta();
+				
+				if(canLook)
+				{	
+					yawObject.rotation.y -= mouse_movement.x * SENS * dt;
+					pitchObject.rotation.x -= mouse_movement.y * SENS * dt;
+
+					pitchObject.rotation.x = Math.max( - PI_2, Math.min( PI_2, pitchObject.rotation.x ));
+				}
+
+				mouse_movement.set(0, 0);
+
+				// Left Right
+				if(moveLeft)
+					yawObject.translateX(-(MOVEMENT_SPEED * dt));
+
+				if(moveRight)
+					yawObject.translateX(MOVEMENT_SPEED * dt);
+
+				// Forward Backward
+				if (moveForward)
+					yawObject.translateZ(-(MOVEMENT_SPEED * dt));
+					
+				if (moveBackward)
+					yawObject.translateZ(MOVEMENT_SPEED * dt);
+
+				// Up Down
+				if(moveUp)
+					yawObject.translateY(MOVEMENT_SPEED * dt);
+
+				if(moveDown) 
+					yawObject.translateY(-(MOVEMENT_SPEED * dt));
+
+				raycaster.setFromCamera(mouse, camera);
+				let intersects = raycaster.intersectObjects(scene.children);
+
+				for (let obj of intersects) {
+					axes.position.set(obj.object.position.x, obj.object.position.y, obj.object.position.z);
+					break;
+				}
+
+				render();
+			}
+
+			function render()
+			{
+				renderer.render(scene, camera);
+			}
+
+			function onMouseMove(event)
+			{
+				mouse.x = ( event.clientX / window.innerWidth ) * 2 - 1;
+				mouse.y = - ( event.clientY / window.innerHeight ) * 2 + 1;
+
+				mouse_movement.set(event.movementX || event.mozMovementX || event.webkitMovementX || 0, event.movementY || event.mozMovementY || event.webkitMovementY || 0);
+			}
+
+			function onKeyDown(event)
+			{
+				switch (event.keyCode) 
+				{
+					case 87: /*W*/ 		moveForward = true; break;
+					case 65: /*A*/ 		moveLeft = true; break;
+					case 83: /*S*/ 		moveBackward = true; break;
+					case 68: /*D*/ 		moveRight = true; break;
+					case 32: /*SB*/ 	moveUp = true; break;
+					case 16: /*SH*/ 	moveDown = true; break;
+				}
+			}
+
+			function onKeyUp(event)
+			{
+				switch (event.keyCode) 
+				{
+					case 87: /*W*/ 		moveForward = false; break;
+					case 65: /*A*/ 		moveLeft = false; break;
+					case 83: /*S*/ 		moveBackward = false; break;
+					case 68: /*D*/ 		moveRight = false; break;
+					case 32: /*SB*/ 	moveUp = false; break;
+					case 16: /*SH*/ 	moveDown = false; break;
+				}
+			}
+			
+			function pointerLockChanged()
+			{
+				canLook = !canLook;
+			}
+
+			function generate_tree(x, y, z, tree_size, secondary_trunk_count, leaf_count_per_trunk)
+			{
+				let thickness_main = tree_size / 16;
+				let thickness_secondary = thickness_main / 2;
+
+				let trunk_base = new THREE.Object3D();
+
+				let geometry = new THREE.CylinderGeometry(thickness_main, thickness_main, tree_size, 8);
+				let cylinder = new THREE.Mesh(geometry, material_block_bark);
+				trunk_base.add(cylinder);
+
+				cylinder.translateY(tree_size / 2);
+				cylinder.castShadow = true;
+				cylinder.receiveShadow = true;
+				
+				let secondary_trunk_space = (tree_size / 2) / secondary_trunk_count;
+				for (let i = 0; i < secondary_trunk_count; i++) {
+					
+					// Create branch base at tree trunk for easy rotation
+					let branch_base = new THREE.Object3D();
+					branch_base.translateY((tree_size / 2)  + (i * secondary_trunk_space));
+					
+					// Branch geometry
+					let branch_geometry = new THREE.CylinderGeometry(thickness_secondary, thickness_secondary, tree_size / 2, 8);
+					let branch_cylinder = new THREE.Mesh(branch_geometry, material_block_bark);
+					branch_cylinder.translateY(tree_size / 4);
+
+					// Add leaves
+					let leaf_distance = (tree_size / 2) / leaf_count_per_trunk;
+					
+					for (let j = 0; j < leaf_count_per_trunk; j++) 
+					{
+						let leaf_base = new THREE.Object3D();
+						let geometry = new THREE.SphereGeometry(tree_size / 10, 8, 8);
+						let sphere = new THREE.Mesh(geometry, material_block_leaf);
+						leaf_base.add(sphere);
+						sphere.translateY(tree_size / 5);
+
+						leaf_base.rotation.x = Math.random() * (Math.PI * 2);
+						leaf_base.rotation.z = Math.random() * (Math.PI * 2);
+						branch_cylinder.add(leaf_base);
+					}
+
+					// Add branch to base and rotate it
+					branch_base.add(branch_cylinder);
+
+					branch_base.rotation.x = Math.random() * (Math.PI * 2);
+					branch_base.rotation.z = Math.random() * (Math.PI * 2);
+
+					trunk_base.add(branch_base);
+				}
+
+				trunk_base.position.set(x, y, z);
+				scene.add(trunk_base);
+				return trunk_base;
+			}
+		</script>
+	</body>
+</html>

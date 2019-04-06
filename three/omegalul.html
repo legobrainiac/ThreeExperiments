@@ -1,0 +1,286 @@
+<meta charset="UTF-8">
+<html>
+	<title>I like trains</title>
+	<head>
+		<style>
+			body { margin: 0; }
+			canvas { width: 100%; height: 100% }
+		</style>
+	</head>
+	<body>
+		<script src="js/three.js"></script>
+		<script src="js/ImprovedNoise.js"></script>
+		<script src="js/THREEx.Fullscreen.js"></script>
+		<script src="js/libs/inflate.min.js"></script>
+		<script src="js/loaders/FBXLoader.js"></script>
+		<script src="js/loaders/OBJLoader.js"></script>
+		<script src="js/libs/dat.gui.min.js"></script>
+		<script>
+            "use strict";
+
+			// Movement
+			const SENS = 0.15;
+			const MOVEMENT_SPEED = 150;
+
+			const PI_2 = Math.PI / 2;
+			
+			let clock = 			new THREE.Clock();
+			let scene = 			new THREE.Scene();
+			let mouse =				new THREE.Vector2();
+			let mouse_movement = 	new THREE.Vector2();
+			let raycaster = 		new THREE.Raycaster();
+			let pitchObject = 		new THREE.Object3D();
+			let yawObject = 		new THREE.Object3D();
+			
+			// Textures / Materials
+			let texture_skybox;
+			let tex_companion_color_map;
+			let tex_companion_emission_map;
+			let tex_companion_normal_map;
+			let tex_companion_metallic_map;
+
+			let tex_tile;
+
+			let mat_companion;
+			let mat_tile;
+
+			// Rendering
+			let renderer;
+			let camera;
+
+			// Helpers
+			let axes;
+			let plane;
+			let cube;
+			let intersect;
+
+			let mixers = [];
+
+			// Lights 
+			let ambient_light;
+
+			let moveForward;
+			let moveBackward;
+			let moveLeft;
+			let moveRight;
+			let moveUp;
+			let moveDown;
+
+			// Pointer lock
+			let canPointerLock;
+			let canLook = false;
+
+			init();
+			update();
+
+			function init()
+			{
+				// Event setup
+				addEventListener("mousemove", onMouseMove, false);
+				addEventListener("keydown", onKeyDown, false);
+				addEventListener("keyup", onKeyUp, false);
+
+				document.addEventListener("mousedown", function(event) {
+					canLook = true;
+					spawn_cube(intersect);
+				}, false );
+				
+				document.addEventListener("mouseup", function(event) {
+					canLook = false;
+				}, false );
+				
+
+				// Rendered setup
+				renderer = new THREE.WebGLRenderer( { antialias: true } );
+				renderer.setSize(window.innerWidth, window.innerHeight);
+				renderer.setPixelRatio(window.devicePixelRatio);
+				renderer.shadowMap.enabled = true;
+
+				document.body.appendChild(renderer.domElement);
+				
+				scene.background = new THREE.Color(0x99ccff);
+				scene.fog = new THREE.Fog(0xcce0ff, 500, 10000);
+
+				// Setup camera field of view, view port, near and far plane
+				camera = new THREE.PerspectiveCamera(90, window.innerWidth / window.innerHeight, 1, 10000);
+				camera.position.set(0, 0, 0);
+				 
+				// Scene setup
+				axes = new THREE.AxesHelper(500);
+                scene.add(axes); 
+
+				// Lights
+				ambient_light = new THREE.AmbientLight(0xffffffff, 2);
+				scene.add(ambient_light);
+
+				texture_skybox = new THREE.TextureLoader().load("textures/sky.jpg");
+				let skybox_geometry = new THREE.CubeGeometry(9999, 9999, 9999);
+				let skybox_material = new THREE.MeshBasicMaterial( { side: THREE.BackSide, map: texture_skybox } );
+				let skybox_cube = new THREE.Mesh(skybox_geometry, skybox_material);
+                //scene.add(skybox_cube);
+
+				pitchObject.add(camera);
+				yawObject.add(pitchObject);
+				
+				scene.add(yawObject);
+				
+				// Companion materials
+				tex_companion_color_map = new THREE.TextureLoader().load("models/companion/tex/COMPANION_low_poli_companion_BaseColor.png");
+				tex_companion_emission_map = new THREE.TextureLoader().load("models/companion/tex/COMPANION_low_poli_companion_Emissive.png");
+				tex_companion_normal_map = new THREE.TextureLoader().load("models/companion/tex/COMPANION_low_poli_companion_Normal.png");
+				tex_companion_metallic_map = new THREE.TextureLoader().load("models/companion/tex/COMPANION_low_poli_companion_OcclusionRoughnessMetallic.png");
+
+				mat_companion = new THREE.MeshStandardMaterial( {
+						map: tex_companion_color_map,
+						emissive: 0x00FF00,
+						emissiveMap: tex_companion_emission_map,
+						emissiveIntensity: 2,
+						normalMap: tex_companion_normal_map,
+						metalnessMap: tex_companion_metallic_map,
+						roughnessMap: tex_companion_metallic_map,
+						aoMap: tex_companion_metallic_map
+					});
+
+				tex_tile = new THREE.TextureLoader().load("textures/pttile.png");
+				mat_tile = new THREE.MeshStandardMaterial({ map: tex_tile });
+				mat_tile.depthWrite = false;
+
+				let ptexture = new THREE.TextureLoader().load("textures/grass.jpg");
+				ptexture.wrapS = ptexture.wrapT = THREE.RepeatWrapping;
+				ptexture.repeat.set(100, 100);
+				ptexture.anisotropy = 16;
+				let pmat = new THREE.MeshStandardMaterial({ map: ptexture });
+				let pgeometry = new THREE.PlaneBufferGeometry(10000, 10000);
+				pgeometry.rotateX(- Math.PI / 2);
+				plane = new THREE.Mesh(pgeometry, pmat);
+
+				scene.add(plane);
+				yawObject.position.y = 100;
+
+				let loader = new THREE.FBXLoader();
+				loader.load("models/companion/COMPANION.fbx", function (object) {
+					object.mixer = new THREE.AnimationMixer(object);
+					//mixers.push(object.mixer);
+					let action = object.mixer.clipAction(object.animations[1]);
+					action.play();
+					
+					object.traverse(function(child) {
+						if (child.isMesh) {
+							child.castShadow = true;
+							child.receiveShadow = true;
+							child.material = mat_companion;
+						}
+					});
+					object.position.set(0, 100, 0);
+					scene.add(object);
+				});
+				
+				spawn_cube(new THREE.Vector3(0, 50, 0));
+			}
+
+			function update()
+			{
+				requestAnimationFrame(update);
+				let dt = clock.getDelta();
+				
+				if(canLook)
+				{	
+					yawObject.rotation.y -= mouse_movement.x * SENS * dt;
+					pitchObject.rotation.x -= mouse_movement.y * SENS * dt;
+
+					pitchObject.rotation.x = Math.max( - PI_2, Math.min( PI_2, pitchObject.rotation.x ));
+				}
+				mouse_movement.set(0, 0);
+
+				// Left Right
+				if(moveLeft)
+					yawObject.translateX(-(MOVEMENT_SPEED * dt));
+
+				if(moveRight)
+					yawObject.translateX(MOVEMENT_SPEED * dt);
+
+				// Forward Backward
+				if (moveForward)
+					yawObject.translateZ(-(MOVEMENT_SPEED * dt));
+					
+				if (moveBackward)
+					yawObject.translateZ(MOVEMENT_SPEED * dt);
+
+				// Up Down
+				if(moveUp)
+					yawObject.translateY(MOVEMENT_SPEED * dt);
+
+				if(moveDown) 
+					yawObject.translateY(-(MOVEMENT_SPEED * dt));
+
+				raycaster.setFromCamera(mouse, camera);
+				let intersects = raycaster.intersectObjects(scene.children);
+
+				for (let obj of intersects) {
+					intersect = obj.point;
+					break;
+				}
+				
+				if (mixers.length > 0) {
+					for (let i = 0; i < mixers.length; i++) {
+						mixers[i].update(clock.getDelta());
+					}
+				}
+
+				render();
+			}
+
+			function spawn_cube(pos)
+			{
+				let geometry = new THREE.BoxGeometry(10, 10, 10);
+				let cube = new THREE.Mesh(geometry, mat_tile);
+				cube.position.set(intersect);
+				scene.add(cube);
+			}
+
+			function render()
+			{
+				renderer.render(scene, camera);
+			}
+
+			function onMouseMove(event)
+			{
+				mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+				mouse.y = - (event.clientY / window.innerHeight) * 2 + 1;
+
+				mouse_movement.set(event.movementX || event.mozMovementX || event.webkitMovementX || 0, event.movementY || event.mozMovementY || event.webkitMovementY || 0);
+			}
+
+			function onKeyDown(event)
+			{
+				switch (event.keyCode) 
+				{
+					case 87: /*W*/ 		moveForward = true; break;
+					case 65: /*A*/ 		moveLeft = true; break;
+					case 83: /*S*/ 		moveBackward = true; break;
+					case 68: /*D*/ 		moveRight = true; break;
+					case 32: /*SB*/ 	moveUp = true; break;
+					case 16: /*SH*/ 	moveDown = true; break;
+				}
+			}
+
+			function onKeyUp(event)
+			{
+				switch (event.keyCode) 
+				{
+					case 87: /*W*/ 		moveForward = false; break;
+					case 65: /*A*/ 		moveLeft = false; break;
+					case 83: /*S*/ 		moveBackward = false; break;
+					case 68: /*D*/ 		moveRight = false; break;
+					case 32: /*SB*/ 	moveUp = false; break;
+					case 16: /*SH*/ 	moveDown = false; break;
+				}
+			}
+			
+			function pointerLockChanged()
+			{
+				canLook = !canLook;
+			}
+		</script>
+	</body>
+</html>
